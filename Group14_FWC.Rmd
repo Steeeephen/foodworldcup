@@ -1,0 +1,641 @@
+
+---
+title: "Food World Cup report"
+author: "Stephen O' Farrell 15459202, Robert Kelly 1030275, Nathan McJames 15572027, Luke Hannon 19253525"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    code_folding: hide
+    css: style.css
+  word_document: default
+  
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(fivethirtyeight)
+library(tidyverse)
+library(magrittr)
+library(ggrepel)
+library(factoextra)
+library(cowplot)
+library(kableExtra)
+library(GGally)
+library(rgdal)
+library(leaflet)
+library(RColorBrewer)
+```
+
+## Report {.tabset}
+
+### Introduction
+#### Workload
+
+We divided our report into 4 main sections.
+
+Luke was responsible for discussing the various factors and the effect they had on average scores using boxplots, t-tests and ANOVAs.
+
+Nathan had responsibility for the material in the Map section. This section shows how we created a choropleth map which colours countries differently according to the average score they received.
+
+Robert analysed the scores, focusing mainly on the distribution of each rating. He used a pairs plot and histograms as well as data manipulation to this end.
+
+Stephen took charge of clustering the countries based on voting patterns, employing the kmeans clustering algorithm to split the countries.
+
+The data cleaning and overall layout of the project was a group effort.
+
+***
+#### Data Cleaning
+
+To make our analysis easier, we replaced responses of "N/A" with 0, which meant that taking the mean score would also consider the 'relevance' of a country. We also removed rows with a high amount of NAs and changed the ratings to numeric values. Here is a sample of the cleaned version of the data. Note that 'Age' and 'Household Income' had levels of unequal sizes, meaning changing these factors to numbers may be misleading as natural numbers won't show this.
+
+```{r fig.height = 3}
+#Remove id column
+fwc <- food_world_cup[,-1]
+
+#Rows with more than 20 NAs removed
+fwc <-fwc[-which(fwc %>% is.na %>% rowSums > 20),]
+fwc[fwc=="N/A"] <- NA
+
+#Numericising the ordinals
+levels(fwc$knowledge) <- 1:4
+levels(fwc$interest) <- 1:4
+levels(fwc$education) <- 1:5
+
+#Numericising the food results and replacing NAs with zeroes
+fwc[,8:47] <- fwc[,8:47] %>% unlist %>% as.integer %>% 
+replace_na(0)
+
+#Show cleaned data
+kable(fwc[1:5,c(3:7,1,2,39,29,30,32,42,47)]) %>% 
+  kable_styling(bootstrap_options ="striped", 
+                font_size = 10, 
+                full_width = F)
+
+```
+
+```{r}
+#Show the shape of the dataset
+fwc.dim <- dim(fwc)
+sprintf("Dataset has %d rows and %d columns", fwc.dim[1], fwc.dim[2])
+```
+
+
+### Factor Analysis
+#### Comparison of Average Ratings by Factor
+
+We began exploring the factors by using graphical and statistical methods to check for differences in average ratings for the different levels of each factor in our dataset. We used *boxplots* to visually seek differences between the different levels ratings and we used *t-tests* (for 2 levels) and *ANOVAs* (for 3+ levels) to compare the means between factor levels.
+
+```{r, include=FALSE, warning=FALSE}
+#Tidy up data and add extra column for average ratings, also change to tibble
+food<- as_tibble(food_world_cup, na.strings = "n/a")
+food[9:48]<- sapply(food[9:48], as.numeric)
+food$avg<- rowMeans(food[9:48], na.rm=T)
+```
+
+***
+#### Graphical Analysis
+
+```{r, warning=FALSE, fig.height = 2.5,fig.width = 9,fig.align="center"}
+#Create grid of boxplots comparing levels of each factor, using ggplot
+p1 <- ggplot(data=subset(food, !is.na(knowledge)),aes(knowledge, avg))+   geom_boxplot() +
+  theme(axis.text.x = element_text(size=6))+
+  labs(title="Knowledge",
+       x = "")+
+  coord_cartesian(ylim = c(1,5))
+
+
+p2 <- ggplot(data=subset(food, !is.na(interest)), aes(interest, avg)) +
+  geom_boxplot() +
+  theme(axis.text.x = element_text(size=6))+
+  labs(title = "Interest",
+       x = "")+
+  coord_cartesian(ylim = c(1,5))
+
+p3 <- ggplot(data=subset(food, !is.na(gender)), aes(gender, avg)) +
+  geom_boxplot() +
+  theme(axis.text.x = element_text(size=6))+
+  labs(title = "Gender",
+       x = "")+
+  coord_cartesian(ylim = c(1,5))
+
+p4 <- ggplot(data=subset(food, !is.na(age)), aes(age, avg)) +
+  geom_boxplot() +
+  theme(axis.text.x = element_text(size=6))+
+  labs(title = "Age",
+       x = "")+
+  coord_cartesian(ylim = c(1,5))
+
+p5 <- ggplot(data=subset(food,!is.na(household_income)),
+             aes(household_income,avg)) +
+  geom_boxplot() +
+  theme(axis.text.x = element_text(size=6, angle = 45, hjust = 1))+
+  labs(title = "Household Income",
+       x = "")
+
+p6 <- ggplot(data=subset(food, !is.na(education)), aes(education, avg)) +
+  geom_boxplot() +
+  theme(axis.text.x = element_text(size=6, angle = 45, hjust = 1))+
+  labs(title = "Education",
+       x = "")
+  
+p7 <- ggplot(data=subset(food, !is.na(location)), aes(location, avg)) +
+  geom_boxplot() +
+  theme(axis.text.x = element_text(size=6, angle = 45, hjust = 1))+
+  labs(title = "Location",
+       x = "")
+
+plot_grid(p1, p2, p3, p4,vjust = 1,label_size = 9,ncol=4,align = "h")
+plot_grid(p5, p6, p7,align = "h",ncol = 3)
+```
+
+The boxplots show similar ranges and medians for most factors, with the exception of knowledge and interest, where ratings appear to rise with increasing interest/knowledge, and possibly location, where the ranges of values visually differ. It is difficult to determine whether there are statistically significant differences between the levels ratings from the boxplots alone, so statistical analysis was necessary.
+
+```{r, include=FALSE, eval=FALSE}
+#Check model assumptions - Normal QQ plots
+a1 <- subset(food, knowledge=="Novice")$avg
+a2 <- subset(food, knowledge=="Intermediate")$avg
+a3 <- subset(food, knowledge=="Advanced")$avg
+a4 <- subset(food, knowledge=="Expert")$avg
+
+par(mar=c(5,5,2,2))
+qqnorm(a1, ylab="avg", xlab="Z quantiles", pch=20, main="", col="magenta")
+qqline(a1, col="magenta")
+aa1<-qqnorm(a2, plot.it=F)
+points(aa1$x, aa1$y, col="blue",pch=20)
+qqline(a2, col="blue")
+aa2<-qqnorm(a3, plot.it=F)
+points(aa2$x, aa2$y, col="red",pch=20)
+qqline(a3, col="red")
+aa3<-qqnorm(a4, plot.it=F)
+points(aa3$x, aa3$y, col="green",pch=20)
+qqline(a4, col="green")
+
+b1 <- subset(food, interest=="Not at all")$avg
+b2 <- subset(food, interest=="Not much")$avg
+b3 <- subset(food, interest=="Some")$avg
+b4 <- subset(food, interest=="A lot")$avg
+
+par(mar=c(5,5,2,2))
+qqnorm(b1, ylab="avg", xlab="Z quantiles", pch=20, main="", col="magenta")
+qqline(b1, col="magenta")
+bb1<-qqnorm(b2, plot.it=F)
+points(bb1$x, bb1$y, col="blue",pch=20)
+qqline(b2, col="blue")
+bb2<-qqnorm(b3, plot.it=F)
+points(bb2$x, bb2$y, col="red",pch=20)
+qqline(b3, col="red")
+bb3<-qqnorm(b4, plot.it=F)
+points(bb3$x, bb3$y, col="green",pch=20)
+qqline(b4, col="green")
+
+c1 <- subset(food, gender=="Male")$avg
+c2 <- subset(food, gender=="Female")$avg
+
+par(mar=c(5,5,2,2))
+qqnorm(c1, ylab="avg", xlab="Z quantiles", pch=20, main="", col="magenta")
+qqline(c1, col="magenta")
+cc1<-qqnorm(c2, plot.it=F)
+points(cc1$x, cc1$y, col="blue",pch=20)
+qqline(c2, col="blue")
+
+d1 <- subset(food, age=="18-29")$avg
+d2 <- subset(food, age=="30-44")$avg
+d3 <- subset(food, age=="45-60")$avg
+d4 <- subset(food, age=="> 60")$avg
+
+par(mar=c(5,5,2,2))
+qqnorm(d1, ylab="avg", xlab="Z quantiles", pch=20, main="", col="magenta")
+qqline(d1, col="magenta")
+dd1<-qqnorm(d2, plot.it=F)
+points(dd1$x, dd1$y, col="blue",pch=20)
+qqline(d2, col="blue")
+dd2<-qqnorm(d3, plot.it=F)
+points(dd2$x, dd2$y, col="red",pch=20)
+qqline(d3, col="red")
+dd3<-qqnorm(d4, plot.it=F)
+points(dd3$x, dd3$y, col="green",pch=20)
+qqline(d4, col="green")
+
+e1 <- subset(food, household_income=="$0 - $24,999")$avg
+e2 <- subset(food, household_income=="$25,000 - $49,999")$avg
+e3 <- subset(food, household_income=="$50,000 - $99,999")$avg
+e4 <- subset(food, household_income=="$100,000 - $149,999")$avg
+e5 <- subset(food, household_income=="$150,000+")$avg
+
+par(mar=c(5,5,2,2))
+qqnorm(e1, ylab="avg", xlab="Z quantiles", pch=20, main="", col="magenta")
+qqline(e1, col="magenta")
+ee1<-qqnorm(e2, plot.it=F)
+points(ee1$x, ee1$y, col="blue",pch=20)
+qqline(e2, col="blue")
+ee2<-qqnorm(e3, plot.it=F)
+points(ee2$x, ee2$y, col="red",pch=20)
+qqline(e3, col="red")
+ee3<-qqnorm(e4, plot.it=F)
+points(ee3$x, ee3$y, col="green",pch=20)
+qqline(e4, col="green")
+ee4<-qqnorm(e5, plot.it=F)
+points(ee4$x, ee4$y, col="yellow",pch=20)
+qqline(e5, col="yellow")
+
+f1 <- subset(food, education=="Less than high school degree")$avg
+f2 <- subset(food, education=="High school degree")$avg
+f3 <- subset(food, education=="Some college or Associate degree")$avg
+f4 <- subset(food, education=="Bachelor degree")$avg
+f5 <- subset(food, education=="Graduate degree")$avg
+
+par(mar=c(5,5,2,2))
+qqnorm(f1, ylab="avg", xlab="Z quantiles", pch=20, main="", col="magenta")
+qqline(f1, col="magenta")
+ff1<-qqnorm(f2, plot.it=F)
+points(ff1$x, ff1$y, col="blue",pch=20)
+qqline(f2, col="blue")
+ff2<-qqnorm(f3, plot.it=F)
+points(ff2$x, ff2$y, col="red",pch=20)
+qqline(f3, col="red")
+ff3<-qqnorm(f4, plot.it=F)
+points(ff3$x, ff3$y, col="green",pch=20)
+qqline(f4, col="green")
+ff4<-qqnorm(f5, plot.it=F)
+points(ff4$x, ff4$y, col="yellow",pch=20)
+qqline(f5, col="yellow")
+
+g1 <- subset(food, location=="West South Central")$avg
+g2 <- subset(food, location=="Pacific")$avg
+g3 <- subset(food, location=="New England")$avg
+g4 <- subset(food, location=="East North Central")$avg
+g5 <- subset(food, location=="South Atlantic")$avg
+g6 <- subset(food, location=="Mountain")$avg
+g7 <- subset(food, location=="Middle Atlantic")$avg
+g8 <- subset(food, location=="West North Central")$avg
+g9 <- subset(food, location=="East South Central")$avg
+
+par(mar=c(5,5,2,2))
+qqnorm(g1, ylab="avg", xlab="Z quantiles", pch=20, main="", col="magenta")
+qqline(g1, col="magenta")
+gg1<-qqnorm(g2, plot.it=F)
+points(gg1$x, gg1$y, col="blue",pch=20)
+qqline(g2, col="blue")
+gg2<-qqnorm(g3, plot.it=F)
+points(gg2$x, gg2$y, col="red",pch=20)
+qqline(g3, col="red")
+gg3<-qqnorm(g4, plot.it=F)
+points(gg3$x, gg3$y, col="green",pch=20)
+qqline(g4, col="green")
+gg4<-qqnorm(g5, plot.it=F)
+points(gg4$x, gg4$y, col="yellow",pch=20)
+qqline(g5, col="yellow")
+gg5<-qqnorm(g6, plot.it=F)
+points(gg5$x, gg5$y, col="orange",pch=20)
+qqline(g6, col="orange")
+gg6<-qqnorm(g7, plot.it=F)
+points(gg6$x, gg6$y, col="purple",pch=20)
+qqline(g7, col="purple")
+gg7<-qqnorm(g8, plot.it=F)
+points(gg7$x, gg7$y, col="black",pch=20)
+qqline(g8, col="black")
+gg8<-qqnorm(g9, plot.it=F)
+points(gg8$x, gg8$y, col="brown",pch=20)
+qqline(g9, col="brown")
+
+```
+
+***
+#### Statistical Analysis
+```{r, eval=FALSE}
+#Carry out statistical analyses
+a<- aov(avg~knowledge, data=food)
+summary(a)
+b<- aov(avg~interest, data=food)
+summary(b)
+c<- t.test(food$avg~food$gender, alternative='two.sided')
+summary(c)
+d<- aov(avg~age, data=food)
+summary(d)
+e<- aov(avg~household_income, data=food)
+summary(e)
+f<- aov(avg~education, data=food)
+summary(f)
+g<- aov(avg~location, data=food)
+summary(g)
+```
+
+For our analysis, our null hypothesis $H_{0}$ was that the mean average ratings were the same for each level of a factor. Our alternative hypothesis $H_{A}$ was that not all mean average ratings were the same.
+
+The P-values obtained for our factors were;
+**Knowledge**: $1.34\mathrm{e}{-06}$, 
+**Interest**: < $2\mathrm{e}{-16}$,
+**Gender**: $0.0747$,
+**Age**: $0.118$, 
+**Household_income**: $0.129$,
+**Education**: $0.461$,
+**Location**: $0.452$
+
+***
+#### Conclusion
+Only knowledge and interest show P-values < 0.05, rejecting the null hypothesis and indicating *significant differences between the average ratings* given. The other 5 factors show P-values > 0.05 indicating that *the average ratings are not significantly different for these factors*. This suggests that food interest and knowledge are important factors in deciding what ratings were given, which makes sense considering that these are the two factors most relevant to the topic of study, whereas other factors such as age or income are less relevant and less good indicators of average rating given. The boxplots for location suggested a possible difference in mean average ratings, but this was found to be not statistically significant. We checked the model assumptions for the statistics tests and found that due to the Central Limit Theorem the assumption of normality is reasonably met. This was also double checked using normal Q-Q plots. The assumption of sample independence is also met, given the context of the data. From the boxplots, we can see that the assumption of equal variance appears to be reasonably met in most cases.
+
+### Score Analysis
+
+#### Interest vs Knowledge
+In the below graphs we can see that the two variables have distributions with opposite skews showing that very few people report to be "Experts" in cusine while many reported being either somewhat or very interested in world cusine.
+
+```{r Interest vs Knowledge, fig.align='center', warning = F, fig.height = 3, fig.width = 9}
+#Comparing the varaiables Knowledge and Interest 
+
+plot_grid(
+  ggplot(fwc, aes(x=knowledge)) +   
+  geom_bar(fill = "#6E80B8")+
+  scale_y_continuous(limit = c(0,610))+
+  labs(y="count",
+       title = "Distribution of Knowledge & Interest"),
+
+  ggplot(fwc,aes(x=interest)) +   
+  geom_bar(fill = "#6E80B8") + 
+  theme(axis.title.y = element_blank())+
+  scale_y_continuous(limit = c(0,610))+
+  labs(title = " ")
+)
+```
+
+***
+#### Cuisine Ratings Explored
+
+We created a function to help with the report that will take the whole dataset, or any subset of it, and create a ratings table with average column at the end.
+
+```{r Functions}
+#Function to create a ratings table with average column
+rating_table <- function(fwc) {
+    #logical table with True for answer given on country
+    x_one  <- fwc[,8:47] == 5 
+    x_two  <- fwc[,8:47] == 4
+    x_three <- fwc[,8:47] == 3
+    x_four   <- fwc[,8:47] == 2
+    x_five   <- fwc[,8:47] == 1
+    #Transpose the data frame
+    x_five <- t(x_five)
+    x_four <- t(x_four)
+    x_three <- t(x_three)
+    x_two <- t(x_two)
+    x_one <- t(x_one)
+    
+    #Summation of fives and feed in data frame
+    x     <- data.frame(apply(x_one, MARGIN = 1, FUN = sum, na.rm = T)) 
+    x[,2] <- (apply(x_two, MARGIN = 1, FUN = sum, na.rm = TRUE))          
+    x[,3] <- (apply(x_three, MARGIN = 1, FUN = sum, na.rm = TRUE)) 
+    x[,4] <- (apply(x_four, MARGIN = 1, FUN = sum, na.rm = TRUE)) 
+    x[,5] <- (apply(x_five, MARGIN = 1, FUN = sum, na.rm = TRUE))
+    
+    colnames(x) <- c("Five_Stars", "Four_Stars", "Three_Stars",
+                     "Two_Stars", "One_Stars")
+    rm(x_five,x_four,x_three,x_two,x_one)
+    x <- rownames_to_column(x, var = "Country")
+    
+    #add new column to give each country an avg score weight by the 
+    #start rating 
+    x <- mutate(x, avg_score =
+                  (((Five_Stars*5)+(Four_Stars*4)+(Three_Stars*3)+
+                      (Two_Stars*2)+(One_Stars))/
+                     (Five_Stars+Four_Stars+Three_Stars+
+                      Two_Stars+One_Stars))) 
+    x$avg_score <-  round(x$avg_score, digits = 2)
+    
+    x <- mutate(x,avg_score_with_zeros = lapply(fwc[,8:47],
+                                                mean,
+                                                na.rm=TRUE))
+    x$avg_score_with_zeros<-round(as.numeric(x$avg_score_with_zeros),2)
+    
+    return(x)
+}
+```
+The data shows that *scores have a strong correlation with other scores that are close to it*. Any country that receives a 5-star rating has a much stronger chance of getting a 4-star in the next review rather than a two or one star. This shows a consistent "mainstream" opinion of world cuisine from the sample. 
+
+```{r Scores explored, fig.align='center', fig.height=5}
+Ratings <- rating_table(fwc)
+
+#Pairs function to show correlation
+ggpairs(Ratings[,2:5],
+        upper = list(continuous = "points", 
+                     combo ="facethist", 
+                     discrete = "facetbar", 
+                     na = "na"),
+        lower = list(continuous = "cor", 
+                     combo = "box_no_facet", 
+                     discrete = "facetbar", 
+                     na = "na"))+
+  theme(panel.grid.major = element_blank())
+```
+
+#### Average Scores
+We created a top 5 list for the full dataset, as well as a table for 'Expert' & 'Novice' participants and for the most well-known foods.
+Interestingly anyone who deemed themselves an experts also reported their interest level as 'very interested'
+
+```{r Top ten lists}
+#Isolate 'experts' and 'novices'
+Experts <- filter(fwc, knowledge == 4)
+Experts_ratings <- rating_table(Experts)
+
+Novices <- filter(fwc, knowledge == 1)
+Novice_Ratings <- rating_table(Novices)
+
+#Show top 5 for each
+Top_Ten <- Ratings %>% arrange(desc(avg_score)) %>% select(Country) %>%  slice(1:5)
+Top_Ten_Experts <- Experts_ratings %>% arrange(desc(avg_score)) %>% select(Country) %>%  slice(1:5)
+Top_Ten_Novices <- Novice_Ratings %>% arrange(desc(avg_score)) %>% select(Country) %>%  slice(1:5)
+
+
+#Most famous foods
+Ratings <- Ratings %>%  mutate(Num_Votes = rowSums(.[2:5]))
+
+# qplot(Ratings$Num_Votes)
+Top_Ten_famous <- Ratings %>% arrange(desc(Num_Votes)) %>% select(Country) %>%  slice(1:5)
+
+#Create table
+Top_Cusine_Compare <- tibble(Mainstream   = Top_Ten, 
+                             Experts      = Top_Ten_Experts, 
+                             Novices      = Top_Ten_Novices,
+                             Famous_Foods = Top_Ten_famous)
+
+#Show table
+Top_Cusine_Compare %>% kable() %>%  kable_styling()
+```
+
+
+```{r, include=FALSE}
+#Garbage collection
+rm(Experts,Novices,Top_Ten,Top_Ten_Experts,Top_Ten_Novices,Novice_Ratings,Experts_ratings)
+```
+
+### Map
+
+#### Creating a Choropleth Map
+
+We thought it would be interesting to create a *choropleth map* where the countries are coloured according to the average rating they received.
+
+
+The first thing we needed to do was import a suitable *shapefile* into R. It was then necessary to change some of our country names to those used in the shapefile.
+
+```{r Importing shapefile and changing names}
+#Import the shapefile into R
+world_spdf <- readOGR(dsn=".",
+                      layer="TM_WORLD_BORDERS_SIMPL-0.3",
+                      verbose=FALSE)
+
+#Change some of our country names so that they match up with the shapefile names
+countries<-names(fwc)[8:47]
+countries[5]<-"bosnia and herzegovina"
+countries[11]<-"costa rica"
+countries[15]<-"united kingdom"
+countries[23]<-"iran (islamic republic of)"
+countries[26]<-"cote d'ivoire"
+countries[32]<-"korea, republic of"
+countries[36]<-"netherlands"
+countries[38]<-"united states"
+countries[40]<-"vietnam"
+```
+
+The next step was to calculate the average score for each country and add a column to our shapefile containing this information.
+
+```{r Adding averages to the shapefile}
+#We need to know what average rating to give to each country
+averages<-lapply(fwc[,8:47],mean,na.rm=TRUE)
+averages<-as.numeric(averages)
+averages<-round(averages, 2)
+names(averages)<-countries
+
+#Modify the shape file data to make it easier to work with
+world_spdf@data$NAME<-as.vector(world_spdf@data$NAME)
+world_spdf@data[216,5]<-"Vietnam"
+world_spdf@data$NAME<-tolower(world_spdf@data$NAME)
+
+#Add a column to our shapefile with the average scores
+world_spdf@data<-transform.data.frame(world_spdf@data, 
+                                      AVERAGE=ifelse(NAME %in% countries,
+                                                      averages[NAME], 
+                                                      NA))
+```
+
+Once we had this done it was possible to use *leaflet* to create a map from our modified shapefile. We also added a legend and other aesthetics to the map.
+
+```{r fig.width=9.5, fig.height=3,fig.align="center"}
+#Split the avearge ratings into different bins for different colours
+mybins <- c(0,0.5,1,1.5,2,2.5,3,3.5,4,4.5)
+mypalette <- colorBin(palette="viridis", 
+                      domain=world_spdf@data$AVERAGE, 
+                      na.color="#f9f9f9", 
+                      bins=mybins) 
+
+#This is the info displayed when you hover over a country
+mytext <- paste("Country: ", world_spdf@data$NAME,"<br/>", 
+                "Average: ", world_spdf@data$AVERAGE,"<br/>", 
+                sep="") %>% lapply(htmltools::HTML)
+ 
+#Create Final Map
+map<-leaflet(world_spdf) %>% 
+  addTiles()  %>% 
+  setView( lat=20, lng=10 , zoom=2) %>%
+  addPolygons( 
+    fillColor=~mypalette(AVERAGE), 
+    stroke=TRUE, 
+    fillOpacity=0.9, 
+    color="white", 
+    weight=0.3,
+    label=mytext,
+    labelOptions=labelOptions( 
+      style = list("font-weight" = "normal", padding = "3px 8px"), 
+      textsize = "13px", 
+      direction = "auto"
+    )
+  ) %>%
+  addLegend(pal=mypalette, 
+            values=~AVERAGE, 
+            opacity=0.9, 
+            title = "Average", 
+            position = "bottomleft")
+
+#Show the map
+map
+```
+
+It is possible to move the map and zoom in on different countries. When one hovers over a particular country the country name and the average score is displayed on screen.
+
+### Clustering
+
+#### Setup
+
+We wanted to show 'similar' countries based on how the participants voted. We decided to use a clustering algorithm called *K-means*, which would automatically split the data into k groups based on the votes given. To find a good value for k, we had to cycle through several to see how that affects the within cluster sum of squares. While we would usually have to scale the data for a K-means clustering, it's not necessary here as we're only considering data that's on the same scale (rating out of 5)
+
+```{r}
+#Transpose dataset for ease of use
+fwc.scores<-t(fwc[,8:47])
+
+#Cycle through values for k and save the total distances to the centroid
+k_vals<-sapply(1:15,function(x) kmeans(fwc.scores,centers=x,nstart = 5)$tot.withinss)
+```
+
+We also want to plot these groups to get a feel for the data. Plotting the two main *principal components* should be a good way to do this. We'll use a *screeplot* to verify the plot will be relevant representation of the data.
+
+```{r fig.align="center",fig.height = 3,fig.width=10}
+#Perform a principal component analysis
+fwc.prcomp <- prcomp(fwc.scores)
+fwc.pcs <- fwc.prcomp$x
+
+#Plot screeplot to show variation and the totwss from cycling through k
+par(mfrow = c(1,2))
+p2 <- fviz_eig(fwc.prcomp)
+p1 <- ggplot(as.data.frame(k_vals),aes(x=1:15,y=k_vals))+
+   geom_line()+
+   labs(x="Values for k",
+        y="Total Within Sum of Squares",
+        title="TOTSS versus k")
+plot_grid(p1,p2)
+```
+
+Choosing a value for k in this instance is tough as we want to pick one before the graph on the left 'evens out' horizontally, but there's no obvious value to choose. We have to balance this with the actual data (choosing too many groups with only 40 countries isn't ideal). Setting k to 5 seems like a good compromise.
+
+From the screeplot, we can see that the first two PCs account for ~55% of the total variance. This should be enough to make a relevant plot if we use these two.
+
+```{r}
+set.seed(12345)
+
+#Run the kmeans algorithm with k = 5 and 25 random sets
+kmeansm <- kmeans(fwc.scores,centers=5,nstart=25)
+
+#Take the clusters to be translated into colours
+kmeans.colour = kmeansm$cluster
+```
+
+
+```{r echo=F}
+names(kmeans.colour)[23] <- "iran (islamic republic of)"
+names(kmeans.colour)[32] <- "korea, republic of"
+names(kmeans.colour)[40] <- "viet nam"
+names(kmeans.colour)[11] <- "costa rica"
+names(kmeans.colour)[5] <- "bosnia and herzegovina"
+names(kmeans.colour)[15] <- "united kingdom"
+names(kmeans.colour)[36] <- "netherlands"
+names(kmeans.colour)[38] <- "united states"
+names(kmeans.colour)[26] <-"cote d'ivoire"
+kmeans.colour[kmeans.colour==1] <- "#4daf4a"
+kmeans.colour[kmeans.colour==2] <- "#377eb8"
+kmeans.colour[kmeans.colour==3] <- "#ff7f00" 
+kmeans.colour[kmeans.colour==4] <- "#984ea3"
+kmeans.colour[kmeans.colour==5] <- "#e41a1c"
+```
+
+#### Result
+
+```{r fig.align="center", fig.width=7, fig.height=4}
+#Plot the first two principal components and colour by kmeans cluster
+ggplot(as.data.frame(fwc.pcs[,1:2]),aes(x=PC1,y=PC2))+
+  geom_label_repel(col=kmeans.colour,
+    label=rownames(fwc.scores),
+    size=3)+
+  geom_point(col=kmeans.colour)+
+  labs(title = "Country Clusters",
+       x="Principal Component 1",
+       y="Principal Component 2")
+```
+
+To interpret this graph, note that the more similar two points are (according to the PCA) the closer they are on the scatterplot. The points are then coloured by their kmeans cluster. From this we can see which countries had the most similar voting patterns. For example, the most prominent and highly rated cuisines are in the same group (US, China, Italy, Mexico). Also interesting to note is the large gap in the middle, indicating a significant difference in pattern between these two groups of cuisines, a result which is backed up by the earlier screeplot. Looking at the countries involved would suggest that it's a split of 'mainstream' and 'niche' cuisines.
